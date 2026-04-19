@@ -1,4 +1,4 @@
-name: Aseprite CI Ultimate
+name: Aseprite CI Ultimate (Full)
 
 on:
   workflow_dispatch:
@@ -12,28 +12,33 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. 拉代码
+      # =========================
+      # 📦 1. Checkout
+      # =========================
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. 安装基础工具
+      # =========================
+      # 🔧 2. 基础工具
+      # =========================
       - name: Install deps
         run: choco install ninja cmake git python -y
 
-      # 3. MSVC
+      # =========================
+      # 🧱 3. MSVC
+      # =========================
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
       # =========================
-      # ⚡ vcpkg（带缓存）
+      # ⚡ 4. vcpkg（缓存）
       # =========================
       - name: Cache vcpkg
         uses: actions/cache@v4
         with:
-          path: |
-            vcpkg
+          path: vcpkg
           key: vcpkg-${{ runner.os }}-v1
 
       - name: Setup vcpkg
@@ -51,7 +56,7 @@ jobs:
           vcpkg\vcpkg install zlib:x64-windows libpng:x64-windows freetype:x64-windows giflib:x64-windows tinyxml2:x64-windows
 
       # =========================
-      # ⚡ depot_tools（隔离使用）
+      # ⚡ 5. depot_tools（持久化 PATH）
       # =========================
       - name: Setup depot_tools
         shell: cmd
@@ -64,14 +69,13 @@ jobs:
         run: gclient
 
       # =========================
-      # ⚡ Skia（缓存关键）
+      # ⚡ 6. Skia（完整 + 缓存 externals）
       # =========================
       - name: Cache Skia
         uses: actions/cache@v4
         with:
-          path: |
-            skia
-          key: skia-${{ runner.os }}-m124
+          path: skia
+          key: skia-${{ runner.os }}-m124-full
 
       - name: Build Skia
         shell: cmd
@@ -82,8 +86,11 @@ jobs:
           cd skia
           git checkout aseprite-m124
 
-          python tools/git-sync-deps
+          REM ===== 正确初始化（关键）=====
+          gclient config https://skia.googlesource.com/skia.git
+          gclient sync
 
+          REM ===== 编译（仅首次）=====
           IF NOT EXIST out\Release-x64 (
             gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
             ninja -C out/Release-x64
@@ -92,7 +99,7 @@ jobs:
           IF NOT EXIST out\Release-x64\skia.lib exit /b 1
 
       # =========================
-      # ⚠️ 修复 ninja 冲突
+      # ⚠️ 7. 修复 ninja 冲突
       # =========================
       - name: Fix PATH
         shell: cmd
@@ -100,7 +107,7 @@ jobs:
           set "PATH=%PATH:depot_tools;=%"
 
       # =========================
-      # 🧱 CMake + Build
+      # 🧱 8. CMake
       # =========================
       - name: Configure
         shell: cmd
@@ -121,6 +128,9 @@ jobs:
 
           IF NOT EXIST build.ninja exit /b 1
 
+      # =========================
+      # 🔨 9. Build
+      # =========================
       - name: Build
         shell: cmd
         run: |
@@ -128,14 +138,17 @@ jobs:
           ninja aseprite
 
       # =========================
-      # 📦 打包
+      # 📦 10. 打包
       # =========================
       - name: Find exe
         id: find_exe
         shell: powershell
         run: |
           $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
-          if (-not $exe) { exit 1 }
+          if (-not $exe) {
+            Write-Error "aseprite.exe NOT FOUND"
+            exit 1
+          }
           echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
       - name: Zip
@@ -146,7 +159,7 @@ jobs:
           Compress-Archive -Path package/* -DestinationPath aseprite.zip
 
       # =========================
-      # 🚀 自动 Release
+      # 🚀 11. 上传 / 发布
       # =========================
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
