@@ -43,5 +43,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aseprite
-          path: build/bin/
+          name: aseprite-build
+          path: build/
