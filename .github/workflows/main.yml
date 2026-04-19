@@ -1,174 +1,117 @@
-name: Aseprite CI Ultimate (Full)
+name: Build Aseprite (Ultimate Fixed)
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 120
 
     steps:
-      # =========================
-      # 📦 1. Checkout
-      # =========================
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+    - name: Checkout Aseprite
+      uses: actions/checkout@v4
 
-      # =========================
-      # 🔧 2. 基础工具
-      # =========================
-      - name: Install deps
-        run: choco install ninja cmake git python -y
+    # -------------------------------
+    # 1. 安装 Visual Studio 环境
+    # -------------------------------
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
 
-      # =========================
-      # 🧱 3. MSVC
-      # =========================
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+    # -------------------------------
+    # 2. Clone depot_tools
+    # -------------------------------
+    - name: Clone depot_tools
+      run: |
+        git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
-      # =========================
-      # ⚡ 4. vcpkg（缓存）
-      # =========================
-      - name: Cache vcpkg
-        uses: actions/cache@v4
-        with:
-          path: vcpkg
-          key: vcpkg-${{ runner.os }}-v1
+    - name: Add depot_tools to PATH
+      run: echo "$PWD/depot_tools" >> $GITHUB_PATH
 
-      - name: Setup vcpkg
-        shell: cmd
-        run: |
-          IF NOT EXIST vcpkg (
-            git clone https://github.com/microsoft/vcpkg
-          )
-          cd vcpkg
-          bootstrap-vcpkg.bat
+    # -------------------------------
+    # 3. 初始化 depot_tools（关键）
+    # -------------------------------
+    - name: Init depot_tools
+      shell: cmd
+      run: |
+        call depot_tools\update_depot_tools.bat
 
-      - name: Install libs
-        shell: cmd
-        run: |
-          vcpkg\vcpkg install zlib:x64-windows libpng:x64-windows freetype:x64-windows giflib:x64-windows tinyxml2:x64-windows
+    # -------------------------------
+    # 4. 获取 Skia（正确方式）
+    # -------------------------------
+    - name: Fetch Skia (with gclient)
+      shell: cmd
+      run: |
+        set PATH=%CD%\depot_tools;%PATH%
 
-      # =========================
-      # ⚡ 5. depot_tools（持久化 PATH）
-      # =========================
-      - name: Setup depot_tools
-        shell: cmd
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo %CD%\depot_tools>>%GITHUB_PATH%
+        mkdir skia
+        cd skia
 
-      - name: Init depot_tools
-        shell: cmd
-        run: gclient
+        git init
+        git remote add origin https://skia.googlesource.com/skia
+        git fetch origin
+        git checkout origin/chrome/m124
 
-      # =========================
-      # ⚡ 6. Skia（完整 + 缓存 externals）
-      # =========================
-      - name: Cache Skia
-        uses: actions/cache@v4
-        with:
-          path: skia
-          key: skia-${{ runner.os }}-m124-full
+        gclient config https://skia.googlesource.com/skia.git
+        gclient sync
 
-      - name: Build Skia
-        shell: cmd
-        run: |
-          IF NOT EXIST skia (
-            git clone https://github.com/aseprite/skia.git
-          )
-          cd skia
-          git checkout aseprite-m124
+    # -------------------------------
+    # 5. 构建 Skia
+    # -------------------------------
+    - name: Build Skia
+      shell: cmd
+      run: |
+        set PATH=%CD%\depot_tools;%PATH%
 
-          REM ===== 正确初始化（关键）=====
-          gclient config https://skia.googlesource.com/skia.git
-          gclient sync
+        cd skia
 
-          REM ===== 编译（仅首次）=====
-          IF NOT EXIST out\Release-x64 (
-            gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
-            ninja -C out/Release-x64
-          )
+        python tools/git-sync-deps
 
-          IF NOT EXIST out\Release-x64\skia.lib exit /b 1
+        bin\gn gen out/Release-x64 ^
+          --args="is_official_build=true is_debug=false target_cpu=\"x64\" skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false"
 
-      # =========================
-      # ⚠️ 7. 修复 ninja 冲突
-      # =========================
-      - name: Fix PATH
-        shell: cmd
-        run: |
-          set "PATH=%PATH:depot_tools;=%"
+        ninja -C out/Release-x64
 
-      # =========================
-      # 🧱 8. CMake
-      # =========================
-      - name: Configure
-        shell: cmd
-        run: |
-          mkdir build
-          cd build
+    # -------------------------------
+    # 6. 构建 Aseprite
+    # -------------------------------
+    - name: Build Aseprite
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
 
-          cmake ^
-            -G Ninja ^
-            -DCMAKE_MAKE_PROGRAM=ninja ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake ^
-            -DLAF_BACKEND=skia ^
-            -DSKIA_DIR=../skia ^
-            -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
-            -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
-            ..
+        cmake -G Ninja ^
+          -DCMAKE_BUILD_TYPE=Release ^
+          -DLAF_BACKEND=skia ^
+          -DSKIA_DIR=%CD%\..\skia ^
+          -DSKIA_LIBRARY_DIR=%CD%\..\skia\out\Release-x64 ^
+          -DSKIA_LIBRARY=%CD%\..\skia\out\Release-x64\skia.lib ^
+          -DENABLE_TESTS=OFF ^
+          -DENABLE_UPDATER=OFF ^
+          ..
 
-          IF NOT EXIST build.ninja exit /b 1
+        ninja
 
-      # =========================
-      # 🔨 9. Build
-      # =========================
-      - name: Build
-        shell: cmd
-        run: |
-          cd build
-          ninja aseprite
+    # -------------------------------
+    # 7. 查找 exe
+    # -------------------------------
+    - name: Find exe
+      shell: powershell
+      run: |
+        $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
+        if (-not $exe) {
+          Write-Error "aseprite.exe NOT FOUND"
+        } else {
+          echo "Found: $($exe.FullName)"
+        }
 
-      # =========================
-      # 📦 10. 打包
-      # =========================
-      - name: Find exe
-        id: find_exe
-        shell: powershell
-        run: |
-          $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "aseprite.exe NOT FOUND"
-            exit 1
-          }
-          echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
-
-      - name: Zip
-        shell: powershell
-        run: |
-          mkdir package
-          Copy-Item "${{ steps.find_exe.outputs.exe_path }}" package/
-          Compress-Archive -Path package/* -DestinationPath aseprite.zip
-
-      # =========================
-      # 🚀 11. 上传 / 发布
-      # =========================
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aseprite
-          path: aseprite.zip
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: aseprite.zip
+    # -------------------------------
+    # 8. 上传
+    # -------------------------------
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aseprite
+        path: |
+          **/aseprite.exe
