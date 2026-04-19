@@ -1,4 +1,4 @@
-name: Build Aseprite (Windows Full Fixed)
+name: Build Aseprite (Stable No-Choco)
 
 on:
   workflow_dispatch:
@@ -8,64 +8,43 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    # ========================
-    # 1. 安装基础工具
-    # ========================
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
+    # MSVC
+    - uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Install dependencies
-      run: |
-        choco install ninja git cmake python -y
+    # 替代 choco
+    - uses: seanmiddleditch/gha-setup-ninja@v4
+    - uses: lukka/get-cmake@latest
 
-    # ========================
-    # 2. 拉 depot_tools（关键）
-    # ========================
+    # depot_tools
     - name: Clone depot_tools
-      run: |
-        git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+      run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
-    - name: Init depot_tools (关键修复点)
+    - name: Init depot_tools
       shell: cmd
       run: |
         set PATH=%CD%\depot_tools;%PATH%
-        where gn
-        where gclient
         gclient
 
-    # ========================
-    # 3. 构建 Skia（核心）
-    # ========================
+    # Skia
     - name: Build Skia
       shell: cmd
       run: |
         set PATH=%CD%\depot_tools;%PATH%
-
         cd skia
-
-        REM 同步依赖（解决 icudtl.dat 问题）
         python tools/git-sync-deps
-
-        REM 生成 build
-        bin\gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_use_system_libpng=false skia_use_system_zlib=false skia_enable_tools=false"
-
-        REM 编译
+        bin\gn gen out/Release-x64 --args="is_official_build=true is_component_build=false"
         ninja -C out/Release-x64
 
-    # ========================
-    # 4. 构建 Aseprite
-    # ========================
-    - name: Configure Aseprite
+    # Aseprite
+    - name: Configure
       shell: cmd
       run: |
         mkdir build
         cd build
-
         cmake .. ^
           -G "Ninja" ^
           -DCMAKE_BUILD_TYPE=Release ^
@@ -74,29 +53,22 @@ jobs:
           -DSKIA_LIBRARY_DIR=%CD%\..\skia\out\Release-x64 ^
           -DSKIA_LIBRARY=%CD%\..\skia\out\Release-x64\skia.lib
 
-    - name: Build Aseprite
+    - name: Build
       run: |
         cd build
         ninja
 
-    # ========================
-    # 5. 检查 exe（最终验证）
-    # ========================
-    - name: Verify EXE
+    - name: Verify
       shell: powershell
       run: |
         $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
         if (-not $exe) {
-          Write-Error "aseprite.exe NOT FOUND (build failed)"
+          Write-Error "aseprite.exe NOT FOUND"
         } else {
           Write-Host "FOUND:" $exe.FullName
         }
 
-    # ========================
-    # 6. 上传
-    # ========================
-    - name: Upload
-      uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v4
       with:
         name: aseprite
         path: build/bin/aseprite.exe
