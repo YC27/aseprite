@@ -1,9 +1,11 @@
 name: build
 on: [push, pull_request]
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+
     strategy:
       fail-fast: false
       matrix:
@@ -18,10 +20,15 @@ jobs:
             ui: cli
           - build_type: RelWithDebInfo
             scripting: noscripts
+
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: 'recursive'
+
+    # ========================
+    # Linux 依赖
+    # ========================
     - name: Install Dependencies
       if: runner.os == 'Linux'
       shell: bash
@@ -31,6 +38,10 @@ jobs:
           libpixman-1-dev libfreetype6-dev libharfbuzz-dev zlib1g-dev \
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl1-mesa-dev \
           libfontconfig1-dev
+
+    # ========================
+    # Skia（官方预编译）
+    # ========================
     - name: Install Skia
       if: ${{ matrix.ui == 'gui' }}
       shell: bash
@@ -44,14 +55,27 @@ jobs:
         skia_file=$(basename $skia_url)
         curl --ssl-revoke-best-effort -L -o "$skia_file" "$skia_url"
         unzip "$skia_file" -d skia
+
+    # ========================
+    # ccache
+    # ========================
     - name: ccache
       uses: hendrikmuhs/ccache-action@v1.2.17
       if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
       with:
         key: ${{ matrix.os }}-${{ matrix.ui }}-${{ matrix.scripting }}-${{ matrix.build_type }}
+
+    # ========================
+    # 工具链
+    # ========================
     - uses: aseprite/get-ninja@main
+
     - uses: ilammy/msvc-dev-cmd@v1
       if: runner.os == 'Windows'
+
+    # ========================
+    # CMake
+    # ========================
     - name: Generating Makefiles
       shell: bash
       run: |
@@ -88,10 +112,18 @@ jobs:
           -DLAF_BACKEND=$laf_backend \
           -DSKIA_DIR=$(realpath skia) \
           -DSKIA_LIBRARY_DIR=$(realpath skia/out/Release-$skia_arch)
+
+    # ========================
+    # 编译
+    # ========================
     - name: Compiling
       shell: bash
       run: |
         cd build && ninja
+
+    # ========================
+    # 测试
+    # ========================
     - name: Running C++ Tests
       shell: bash
       run: |
@@ -99,6 +131,7 @@ jobs:
           export XVFB=xvfb-run
         fi
         cd build && $XVFB ctest --output-on-failure
+
     - name: Running CLI Tests
       if: ${{ matrix.scripting == 'lua' }}
       shell: bash
@@ -109,3 +142,26 @@ jobs:
         export ASEPRITE=$PWD/build/bin/aseprite
         cd tests
         $XVFB bash run-tests.sh
+
+    # ========================
+    # ✅ 关键：打包
+    # ========================
+    - name: Prepare Artifact
+      shell: bash
+      run: |
+        mkdir artifact
+
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          cp build/bin/aseprite.exe artifact/ || true
+        else
+          cp build/bin/aseprite artifact/ || true
+        fi
+
+    # ========================
+    # ✅ 上传
+    # ========================
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aseprite-${{ matrix.os }}-${{ matrix.build_type }}-${{ matrix.ui }}
+        path: artifact/
