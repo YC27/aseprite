@@ -1,4 +1,4 @@
-name: Build Aseprite (build.cmd)
+name: Build Aseprite (Full From Source)
 
 on:
   workflow_dispatch:
@@ -6,11 +6,11 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 120   # ⚠️ Skia 编译时间较长
+    timeout-minutes: 120
 
     steps:
-      # 1. 拉取源码（包含子模块）
-      - name: Checkout
+      # 1. 拉取 Aseprite 源码
+      - name: Checkout Aseprite
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -20,24 +20,59 @@ jobs:
         run: |
           choco install ninja cmake git python -y
 
-      # 3. 设置 MSVC 编译环境
+      # 3. 设置 MSVC
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # 4. 运行官方自动构建脚本
-      - name: Build Aseprite (auto)
+      # 4. 安装 depot_tools（Skia 必须）
+      - name: Install depot_tools
         run: |
-          build.cmd
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$PWD/depot_tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      # 5. 查看生成文件（调试用，可删）
-      - name: List build files
+      # 5. 拉取 Skia（Aseprite专用分支）
+      - name: Clone Skia
         run: |
-          dir /s
+          git clone https://github.com/aseprite/skia.git
+          cd skia
+          git checkout aseprite-m124
 
-      # 6. 上传 artifact
+      # 6. 同步 Skia 依赖
+      - name: Sync Skia deps
+        run: |
+          cd skia
+          python tools/git-sync-deps
+
+      # 7. 编译 Skia
+      - name: Build Skia
+        run: |
+          cd skia
+          gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
+          ninja -C out/Release-x64
+
+      # 8. 编译 Aseprite
+      - name: Build Aseprite
+        run: |
+          mkdir build
+          cd build
+          cmake ^
+            -G Ninja ^
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DLAF_BACKEND=skia ^
+            -DSKIA_DIR=../skia ^
+            -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
+            -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
+            ..
+          ninja aseprite
+
+      # 9. 打包
+      - name: Zip build
+        run: |
+          powershell Compress-Archive -Path build/bin/* -DestinationPath aseprite.zip
+
+      # 10. 上传
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-windows
-          path: |
-            build/bin/
+          path: aseprite.zip
