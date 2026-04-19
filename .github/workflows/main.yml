@@ -1,45 +1,36 @@
-name: Build Aseprite (Ultimate Fixed)
+name: Build Aseprite (Industrial Stable)
 
 on:
-  push:
   workflow_dispatch:
+  push:
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 120
 
     steps:
-    - name: Checkout Aseprite
+    - name: Checkout
       uses: actions/checkout@v4
 
-    # -------------------------------
-    # 1. 安装 Visual Studio 环境
-    # -------------------------------
+    # ✅ MSVC 环境
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
 
-    # -------------------------------
-    # 2. Clone depot_tools
-    # -------------------------------
+    # ✅ depot_tools
     - name: Clone depot_tools
-      run: |
-        git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+      run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
     - name: Add depot_tools to PATH
       run: echo "$PWD/depot_tools" >> $GITHUB_PATH
 
-    # -------------------------------
-    # 3. 初始化 depot_tools（关键）
-    # -------------------------------
     - name: Init depot_tools
       shell: cmd
       run: |
         call depot_tools\update_depot_tools.bat
 
-    # -------------------------------
-    # 4. 获取 Skia（正确方式）
-    # -------------------------------
-    - name: Fetch Skia (with gclient)
+    # ✅ 拉 Skia（带重试机制）
+    - name: Fetch Skia (retry)
       shell: cmd
       run: |
         set PATH=%CD%\depot_tools;%PATH%
@@ -50,31 +41,44 @@ jobs:
         git init
         git remote add origin https://skia.googlesource.com/skia
         git fetch origin
-        git checkout origin/chrome/m124
+        git checkout chrome/m124
 
         gclient config https://skia.googlesource.com/skia.git
-        gclient sync
 
-    # -------------------------------
-    # 5. 构建 Skia
-    # -------------------------------
+        REM ⭐ 重试3次，防网络炸
+        for /L %%i in (1,1,3) do (
+          echo Attempt %%i
+          gclient sync && goto success
+          timeout /t 10
+        )
+        echo gclient sync failed
+        exit /b 1
+
+        :success
+
+    # ✅ 构建 Skia（带校验）
     - name: Build Skia
       shell: cmd
       run: |
         set PATH=%CD%\depot_tools;%PATH%
-
         cd skia
 
-        python tools/git-sync-deps
-
-        bin\gn gen out/Release-x64 ^
+        bin\gn gen out\Release-x64 ^
           --args="is_official_build=true is_debug=false target_cpu=\"x64\" skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false"
 
-        ninja -C out/Release-x64
+        IF NOT EXIST out\Release-x64 (
+          echo GN FAILED
+          exit /b 1
+        )
 
-    # -------------------------------
-    # 6. 构建 Aseprite
-    # -------------------------------
+        ninja -C out\Release-x64
+
+        IF NOT EXIST out\Release-x64\skia.lib (
+          echo SKIA BUILD FAILED
+          exit /b 1
+        )
+
+    # ✅ 构建 Aseprite
     - name: Build Aseprite
       shell: cmd
       run: |
@@ -93,23 +97,19 @@ jobs:
 
         ninja
 
-    # -------------------------------
-    # 7. 查找 exe
-    # -------------------------------
-    - name: Find exe
+    # ✅ 强制查找 exe（必须成功）
+    - name: Verify EXE
       shell: powershell
       run: |
         $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
         if (-not $exe) {
-          Write-Error "aseprite.exe NOT FOUND"
+          Write-Error "❌ aseprite.exe NOT FOUND"
         } else {
-          echo "Found: $($exe.FullName)"
+          echo "✅ Found: $($exe.FullName)"
         }
 
-    # -------------------------------
-    # 8. 上传
-    # -------------------------------
-    - name: Upload Artifact
+    # ✅ 上传
+    - name: Upload
       uses: actions/upload-artifact@v4
       with:
         name: aseprite
