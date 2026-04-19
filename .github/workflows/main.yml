@@ -1,4 +1,4 @@
-name: Build Aseprite (Stable)
+name: Build Aseprite (Fixed Working)
 
 on:
   workflow_dispatch:
@@ -10,8 +10,7 @@ jobs:
 
     steps:
       # 1. Checkout
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
@@ -22,8 +21,7 @@ jobs:
       # 3. depot_tools
       - name: Install depot_tools
         shell: cmd
-        run: |
-          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
       - name: Init depot_tools
         shell: cmd
@@ -47,8 +45,7 @@ jobs:
           python tools/git-sync-deps
 
       # 5. MSVC
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
@@ -62,8 +59,14 @@ jobs:
 
           REM ===== Build Skia =====
           cd skia
-          gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
+          gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_enable_tools=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
           ninja -C out/Release-x64
+
+          IF NOT EXIST out\Release-x64\skia.lib (
+            echo ERROR: skia.lib NOT FOUND
+            exit /b 1
+          )
+
           cd ..
 
           REM ===== Build Aseprite =====
@@ -73,7 +76,6 @@ jobs:
           cmake ^
             -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
-            -DCMAKE_MAKE_PROGRAM=ninja ^
             -DLAF_BACKEND=skia ^
             -DSKIA_DIR=../skia ^
             -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
@@ -82,36 +84,52 @@ jobs:
 
           ninja aseprite
 
-      # 7. Debug（关键！）
-      - name: Debug build output
-        run: |
-          echo ===== TREE =====
-          tree /f
+          IF NOT EXIST aseprite.exe (
+            IF NOT EXIST bin\aseprite.exe (
+              echo ERROR: aseprite.exe NOT BUILT
+              exit /b 1
+            )
+          )
 
-      # 8. 查找 exe（关键增强）
+      # 7. Debug（非常关键）
+      - name: Debug tree
+        run: tree /f
+
+      # 8. 找 exe（双路径）
       - name: Find exe
         id: find_exe
         shell: powershell
         run: |
-          $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
-          if (-not $exe) {
-            Write-Error "aseprite.exe NOT FOUND!"
+          $paths = @(
+            "build/aseprite.exe",
+            "build/bin/aseprite.exe"
+          )
+
+          $found = $null
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              $found = $p
+              break
+            }
+          }
+
+          if (-not $found) {
+            Write-Error "aseprite.exe NOT FOUND in expected paths"
             exit 1
           }
-          echo "Found: $($exe.FullName)"
-          echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
-      # 9. 打包（永不炸版本）
+          echo "exe_path=$found" >> $env:GITHUB_OUTPUT
+
+      # 9. 打包
       - name: Zip
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path package
+          mkdir package
           Copy-Item "${{ steps.find_exe.outputs.exe_path }}" package/
           Compress-Archive -Path package/* -DestinationPath aseprite.zip
 
       # 10. 上传
-      - name: Upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: aseprite
           path: aseprite.zip
