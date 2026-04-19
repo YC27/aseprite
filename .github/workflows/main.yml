@@ -1,4 +1,4 @@
-name: Build Aseprite (Full From Source)
+name: Build Aseprite (Full Fixed)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. 拉取 Aseprite 源码
+      # 1. 拉取 Aseprite
       - name: Checkout Aseprite
         uses: actions/checkout@v4
         with:
@@ -20,38 +20,49 @@ jobs:
         run: |
           choco install ninja cmake git python -y
 
-      # 3. 设置 MSVC
+      # 3. MSVC 环境
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      # 4. 安装 depot_tools（Skia 必须）
+      # 4. 安装 depot_tools
       - name: Install depot_tools
+        shell: cmd
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo "$PWD/depot_tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo %CD%\depot_tools>> %GITHUB_PATH%
 
-      # 5. 拉取 Skia（Aseprite专用分支）
+      # 5. 初始化 depot_tools（关键🔥）
+      - name: Init depot_tools
+        shell: cmd
+        run: |
+          gclient
+
+      # 6. 拉取 Skia
       - name: Clone Skia
+        shell: cmd
         run: |
           git clone https://github.com/aseprite/skia.git
           cd skia
           git checkout aseprite-m124
 
-      # 6. 同步 Skia 依赖
+      # 7. 同步依赖
       - name: Sync Skia deps
+        shell: cmd
         run: |
           cd skia
           python tools/git-sync-deps
 
-      # 7. 编译 Skia
+      # 8. 编译 Skia
       - name: Build Skia
+        shell: cmd
         run: |
           cd skia
           gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
           ninja -C out/Release-x64
 
-      # 8. 编译 Aseprite
+      # 9. 编译 Aseprite
       - name: Build Aseprite
+        shell: cmd
         run: |
           mkdir build
           cd build
@@ -65,14 +76,14 @@ jobs:
             ..
           ninja aseprite
 
-      # 9. 打包
-      - name: Zip build
+      # 10. 打包
+      - name: Zip
         run: |
           powershell Compress-Archive -Path build/bin/* -DestinationPath aseprite.zip
 
-      # 10. 上传
+      # 11. 上传
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aseprite-windows
+          name: aseprite
           path: aseprite.zip
