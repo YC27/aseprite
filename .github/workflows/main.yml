@@ -1,4 +1,4 @@
-name: Build Aseprite (Windows)
+name: Build Aseprite (build.cmd)
 
 on:
   workflow_dispatch:
@@ -6,9 +6,10 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 120   # ⚠️ Skia 编译时间较长
 
     steps:
-      # 1. 拉代码（包含子模块）
+      # 1. 拉取源码（包含子模块）
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -17,54 +18,26 @@ jobs:
       # 2. 安装依赖
       - name: Install dependencies
         run: |
-          choco install ninja cmake -y
+          choco install ninja cmake git python -y
 
-      # 3. 下载 Skia（⚠️ 正确版本 m124）
-      - name: Download Skia
-        run: |
-          Invoke-WebRequest -Uri https://github.com/aseprite/skia/releases/download/m124/skia-windows-release-x64.zip -OutFile skia.zip
-
-      # 4. 解压 Skia
-      - name: Extract Skia
-        run: |
-          tar -xf skia.zip
-
-      # 5. Debug（可选但强烈推荐）
-      - name: Check Skia
-        run: |
-          dir
-
-      # 6. 配置 VS 编译环境 + CMake
-      - name: Configure
+      # 3. 设置 MSVC 编译环境
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Run CMake
+      # 4. 运行官方自动构建脚本
+      - name: Build Aseprite (auto)
         run: |
-          mkdir build
-          cd build
-          cmake ^
-            -G Ninja ^
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-            -DLAF_BACKEND=skia ^
-            -DSKIA_DIR=../skia ^
-            -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
-            -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
-            ..
+          build.cmd
 
-      # 7. 编译
-      - name: Build
-        run: |
-          cd build
-          ninja aseprite
-
-      # 8. 查看生成文件（调试用）
+      # 5. 查看生成文件（调试用，可删）
       - name: List build files
         run: |
-          dir build /s
+          dir /s
 
-      # 9. 上传 artifact（关键🔥）
+      # 6. 上传 artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: aseprite-windows
-          path: build/
+          path: |
+            build/bin/
