@@ -4,7 +4,7 @@ on: [push, pull_request]
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     strategy:
       fail-fast: false
@@ -31,7 +31,6 @@ jobs:
     # ========================
     - name: Install Dependencies
       if: runner.os == 'Linux'
-      shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y \
@@ -40,7 +39,7 @@ jobs:
           libfontconfig1-dev
 
     # ========================
-    # Skia（官方预编译）
+    # Skia
     # ========================
     - name: Install Skia
       if: ${{ matrix.ui == 'gui' }}
@@ -144,7 +143,7 @@ jobs:
         $XVFB bash run-tests.sh
 
     # ========================
-    # ✅ 关键：打包（完整版，含 DLL）
+    # ✅ Windows 打包（完整运行时）
     # ========================
     - name: Prepare Artifact (Windows Full Bundle)
       if: runner.os == 'Windows'
@@ -152,36 +151,58 @@ jobs:
       run: |
         mkdir -p artifact
 
-        echo "==== Copy EXE ===="
+        echo "==== EXE ===="
         cp build/bin/aseprite.exe artifact/
 
-        echo "==== Copy OpenSSL DLLs ===="
-        # 常见 OpenSSL 路径（GitHub Actions 环境）
-        OPENSSL_DIR="/c/Program Files/OpenSSL/bin"
-        if [ -d "$OPENSSL_DIR" ]; then
-          cp "$OPENSSL_DIR"/*.dll artifact/ || true
-        fi
+        echo "==== DATA (关键) ===="
+        cp -r data artifact/
 
-        echo "==== Copy MSVC Runtime ===="
-        # 拷贝系统运行库（关键！）
-        cp /c/Windows/System32/vcruntime*.dll artifact/ || true
-        cp /c/Windows/System32/msvcp*.dll artifact/ || true
+        echo "==== 扫描依赖 DLL ===="
+        dumpbin //DEPENDENTS build/bin/aseprite.exe > deps.txt
 
-        echo "==== Copy other possible DLLs ===="
+        while read line; do
+          dll=$(echo $line | tr -d '\r')
+          if [[ "$dll" == *.dll ]]; then
+            for dir in \
+              "/c/Windows/System32" \
+              "/c/Program Files/OpenSSL/bin" \
+              "/c/Program Files/Git/usr/bin" \
+              "/c/Program Files (x86)/Microsoft Visual Studio"/*/*/VC/Redist/*/*; do
+              
+              if [ -f "$dir/$dll" ]; then
+                echo "Copy $dll"
+                cp "$dir/$dll" artifact/ 2>/dev/null || true
+                break
+              fi
+            done
+          fi
+        done < deps.txt
+
+        echo "==== build 目录 DLL ===="
         cp build/bin/*.dll artifact/ 2>/dev/null || true
 
-        echo "==== Done ===="
-        ls -lah artifact
-
-    - name: Prepare Artifact (Linux/macOS)
+    # ========================
+    # macOS / Linux 打包
+    # ========================
+    - name: Prepare Artifact (Unix)
       if: runner.os != 'Windows'
       shell: bash
       run: |
         mkdir -p artifact
-        cp build/bin/aseprite artifact/ || true
+        cp build/bin/aseprite artifact/
+        cp -r data artifact/
 
     # ========================
-    # ✅ 上传
+    # 打包 zip
+    # ========================
+    - name: Zip Artifact
+      shell: bash
+      run: |
+        cd artifact
+        7z a aseprite-${{ runner.os }}-${{ matrix.build_type }}.zip *
+
+    # ========================
+    # 上传
     # ========================
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
