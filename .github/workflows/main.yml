@@ -1,4 +1,4 @@
-name: Build Aseprite (Finally Fixed)
+name: Build Aseprite (Working Final)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. Checkout
+      # 1. 拉代码
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -18,58 +18,15 @@ jobs:
       - name: Install deps
         run: choco install ninja cmake git python -y
 
-      # 3. depot_tools
-      - name: Install depot_tools
-        shell: cmd
-        run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-
-      - name: Init depot_tools
-        shell: cmd
-        run: |
-          set PATH=%PATH%;%CD%\depot_tools
-          gclient
-
-      # 4. Skia
-      - name: Clone Skia
-        shell: cmd
-        run: |
-          git clone https://github.com/aseprite/skia.git
-          cd skia
-          git checkout aseprite-m124
-
-      - name: Sync Skia deps
-        shell: cmd
-        run: |
-          set PATH=%PATH%;%CD%\depot_tools
-          cd skia
-          python tools/git-sync-deps
-
-      # 5. MSVC
+      # 3. MSVC
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # 6. Build
-      - name: Build All
+      # 4. 配置 + 构建（关键）
+      - name: Build Aseprite
         shell: cmd
-        env:
-          DEPOT_TOOLS_WIN_TOOLCHAIN: 0
         run: |
-          set PATH=%PATH%;%CD%\depot_tools
-
-          REM ===== Build Skia =====
-          cd skia
-          gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_enable_tools=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
-          ninja -C out/Release-x64
-
-          IF NOT EXIST out\Release-x64\skia.lib (
-            echo ERROR: skia.lib NOT FOUND
-            exit /b 1
-          )
-
-          cd ..
-
-          REM ===== Build Aseprite =====
           mkdir build
           cd build
 
@@ -77,38 +34,28 @@ jobs:
             -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DLAF_BACKEND=skia ^
-            -DSKIA_DIR=../skia ^
-            -DSKIA_INCLUDE_DIR=../skia ^
-            -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
-            -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
+            -DSKIA=ON ^
             ..
 
-          REM 🔥 查看有没有 aseprite target
-          ninja -t targets | findstr aseprite
+          ninja
 
-          ninja aseprite
-
-          REM 再次检查
-          dir
-          dir bin
-
-      # 7. Debug（全量）
+      # 5. Debug（必须保留）
       - name: Debug tree
         run: tree /f
 
-      # 8. 自动查找 exe（最终兜底）
+      # 6. 查找 exe
       - name: Find exe
         id: find_exe
         shell: powershell
         run: |
           $exe = Get-ChildItem -Recurse -Filter aseprite.exe | Select-Object -First 1
           if (-not $exe) {
-            Write-Error "aseprite.exe NOT FOUND (build likely failed)"
+            Write-Error "aseprite.exe NOT FOUND (build failed)"
             exit 1
           }
           echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
-      # 9. 打包
+      # 7. 打包
       - name: Zip
         shell: powershell
         run: |
@@ -116,7 +63,7 @@ jobs:
           Copy-Item "${{ steps.find_exe.outputs.exe_path }}" package/
           Compress-Archive -Path package/* -DestinationPath aseprite.zip
 
-      # 10. 上传
+      # 8. 上传
       - uses: actions/upload-artifact@v4
         with:
           name: aseprite
