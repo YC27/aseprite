@@ -17,10 +17,9 @@ jobs:
 
       # 2. 安装依赖
       - name: Install deps
-        run: |
-          choco install ninja cmake git python -y
+        run: choco install ninja cmake git python -y
 
-      # 3. 安装 depot_tools（不污染 PATH）
+      # 3. 安装 depot_tools
       - name: Install depot_tools
         shell: cmd
         run: |
@@ -49,16 +48,18 @@ jobs:
           cd skia
           python tools/git-sync-deps
 
-      # 7. 编译（Skia + Aseprite 一起在 MSVC 环境中）
-      - name: Build All
+      # 7. 设置 MSVC（单独 step）
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+
+      # 8. 编译（单独 step，必须有 run）
+      - name: Build All
+        shell: cmd
         env:
           DEPOT_TOOLS_WIN_TOOLCHAIN: 0
-        shell: cmd
         run: |
-          REM 加 depot_tools（但放后面）
           set PATH=%PATH%;%CD%\depot_tools
 
           REM === Build Skia ===
@@ -83,12 +84,12 @@ jobs:
 
           ninja aseprite
 
-      # 8. 打包
+      # 9. 打包
       - name: Zip
         run: |
           powershell Compress-Archive -Path build/bin/* -DestinationPath aseprite.zip
 
-      # 9. 上传
+      # 10. 上传
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
