@@ -1,4 +1,4 @@
-name: Build Aseprite (Full Fixed)
+name: Build Aseprite (Final Fixed)
 
 on:
   workflow_dispatch:
@@ -9,35 +9,31 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. 拉取 Aseprite
-      - name: Checkout Aseprite
+      # 1. 拉代码
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
       # 2. 安装依赖
-      - name: Install dependencies
+      - name: Install deps
         run: |
           choco install ninja cmake git python -y
 
-      # 3. MSVC 环境
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      # 4. 安装 depot_tools
+      # 3. 安装 depot_tools（不污染 PATH）
       - name: Install depot_tools
         shell: cmd
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo %CD%\depot_tools>> %GITHUB_PATH%
 
-      # 5. 初始化 depot_tools（关键🔥）
+      # 4. 初始化 depot_tools
       - name: Init depot_tools
         shell: cmd
         run: |
+          set PATH=%PATH%;%CD%\depot_tools
           gclient
 
-      # 6. 拉取 Skia
+      # 5. 拉 Skia
       - name: Clone Skia
         shell: cmd
         run: |
@@ -45,44 +41,55 @@ jobs:
           cd skia
           git checkout aseprite-m124
 
-      # 7. 同步依赖
+      # 6. 同步依赖
       - name: Sync Skia deps
         shell: cmd
         run: |
+          set PATH=%PATH%;%CD%\depot_tools
           cd skia
           python tools/git-sync-deps
 
-      # 8. 编译 Skia
-      - name: Build Skia
+      # 7. 编译（Skia + Aseprite 一起在 MSVC 环境中）
+      - name: Build All
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+        env:
+          DEPOT_TOOLS_WIN_TOOLCHAIN: 0
         shell: cmd
         run: |
+          REM 加 depot_tools（但放后面）
+          set PATH=%PATH%;%CD%\depot_tools
+
+          REM === Build Skia ===
           cd skia
           gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
           ninja -C out/Release-x64
+          cd ..
 
-      # 9. 编译 Aseprite
-      - name: Build Aseprite
-        shell: cmd
-        run: |
+          REM === Build Aseprite ===
           mkdir build
           cd build
+
           cmake ^
             -G Ninja ^
             -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DCMAKE_MAKE_PROGRAM=ninja ^
             -DLAF_BACKEND=skia ^
             -DSKIA_DIR=../skia ^
             -DSKIA_LIBRARY_DIR=../skia/out/Release-x64 ^
             -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
             ..
+
           ninja aseprite
 
-      # 10. 打包
+      # 8. 打包
       - name: Zip
         run: |
           powershell Compress-Archive -Path build/bin/* -DestinationPath aseprite.zip
 
-      # 11. 上传
-      - name: Upload artifact
+      # 9. 上传
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: aseprite
