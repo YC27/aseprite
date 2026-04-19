@@ -144,18 +144,41 @@ jobs:
         $XVFB bash run-tests.sh
 
     # ========================
-    # ✅ 关键：打包
+    # ✅ 关键：打包（完整版，含 DLL）
     # ========================
-    - name: Prepare Artifact
+    - name: Prepare Artifact (Windows Full Bundle)
+      if: runner.os == 'Windows'
       shell: bash
       run: |
-        mkdir artifact
+        mkdir -p artifact
 
-        if [[ "${{ runner.os }}" == "Windows" ]]; then
-          cp build/bin/aseprite.exe artifact/ || true
-        else
-          cp build/bin/aseprite artifact/ || true
+        echo "==== Copy EXE ===="
+        cp build/bin/aseprite.exe artifact/
+
+        echo "==== Copy OpenSSL DLLs ===="
+        # 常见 OpenSSL 路径（GitHub Actions 环境）
+        OPENSSL_DIR="/c/Program Files/OpenSSL/bin"
+        if [ -d "$OPENSSL_DIR" ]; then
+          cp "$OPENSSL_DIR"/*.dll artifact/ || true
         fi
+
+        echo "==== Copy MSVC Runtime ===="
+        # 拷贝系统运行库（关键！）
+        cp /c/Windows/System32/vcruntime*.dll artifact/ || true
+        cp /c/Windows/System32/msvcp*.dll artifact/ || true
+
+        echo "==== Copy other possible DLLs ===="
+        cp build/bin/*.dll artifact/ 2>/dev/null || true
+
+        echo "==== Done ===="
+        ls -lah artifact
+
+    - name: Prepare Artifact (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        mkdir -p artifact
+        cp build/bin/aseprite artifact/ || true
 
     # ========================
     # ✅ 上传
