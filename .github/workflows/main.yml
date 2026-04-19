@@ -1,7 +1,10 @@
-name: Build Aseprite (Fixed depot_tools)
+name: Aseprite CI Ultimate
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 jobs:
   build:
@@ -9,62 +12,96 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      # 1. Checkout
+      # 1. 拉代码
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 2. 安装工具
+      # 2. 安装基础工具
       - name: Install deps
         run: choco install ninja cmake git python -y
 
-      # 3. vcpkg
+      # 3. MSVC
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # =========================
+      # ⚡ vcpkg（带缓存）
+      # =========================
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg
+          key: vcpkg-${{ runner.os }}-v1
+
       - name: Setup vcpkg
         shell: cmd
         run: |
-          git clone https://github.com/microsoft/vcpkg
+          IF NOT EXIST vcpkg (
+            git clone https://github.com/microsoft/vcpkg
+          )
           cd vcpkg
           bootstrap-vcpkg.bat
 
-      - name: Install libraries
+      - name: Install libs
         shell: cmd
         run: |
           vcpkg\vcpkg install zlib:x64-windows libpng:x64-windows freetype:x64-windows giflib:x64-windows tinyxml2:x64-windows
 
-      # 4. depot_tools（关键修复）
-      - name: Install depot_tools
+      # =========================
+      # ⚡ depot_tools（隔离使用）
+      # =========================
+      - name: Setup depot_tools
         shell: cmd
         run: |
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo %CD%\depot_tools>>%GITHUB_PATH%
 
-      # 5. 初始化 depot_tools（关键）
       - name: Init depot_tools
         shell: cmd
-        run: |
-          gclient
+        run: gclient
 
-      # 6. 构建 Skia
+      # =========================
+      # ⚡ Skia（缓存关键）
+      # =========================
+      - name: Cache Skia
+        uses: actions/cache@v4
+        with:
+          path: |
+            skia
+          key: skia-${{ runner.os }}-m124
+
       - name: Build Skia
         shell: cmd
         run: |
-          git clone https://github.com/aseprite/skia.git
+          IF NOT EXIST skia (
+            git clone https://github.com/aseprite/skia.git
+          )
           cd skia
           git checkout aseprite-m124
 
           python tools/git-sync-deps
 
-          gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
-          ninja -C out/Release-x64
+          IF NOT EXIST out\Release-x64 (
+            gn gen out/Release-x64 --args="is_official_build=true is_component_build=false skia_enable_gpu=false skia_use_system_libpng=false skia_use_system_libjpeg_turbo=false skia_use_system_zlib=false"
+            ninja -C out/Release-x64
+          )
 
           IF NOT EXIST out\Release-x64\skia.lib exit /b 1
 
-      # 7. MSVC
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      # =========================
+      # ⚠️ 修复 ninja 冲突
+      # =========================
+      - name: Fix PATH
+        shell: cmd
+        run: |
+          set "PATH=%PATH:depot_tools;=%"
 
-      # 8. CMake
+      # =========================
+      # 🧱 CMake + Build
+      # =========================
       - name: Configure
         shell: cmd
         run: |
@@ -73,6 +110,7 @@ jobs:
 
           cmake ^
             -G Ninja ^
+            -DCMAKE_MAKE_PROGRAM=ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake ^
             -DLAF_BACKEND=skia ^
@@ -83,18 +121,15 @@ jobs:
 
           IF NOT EXIST build.ninja exit /b 1
 
-      # 9. Build
       - name: Build
         shell: cmd
         run: |
           cd build
           ninja aseprite
 
-      # 10. Debug
-      - name: Debug
-        run: tree /f
-
-      # 11. 找 exe
+      # =========================
+      # 📦 打包
+      # =========================
       - name: Find exe
         id: find_exe
         shell: powershell
@@ -103,7 +138,6 @@ jobs:
           if (-not $exe) { exit 1 }
           echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
 
-      # 12. 打包
       - name: Zip
         shell: powershell
         run: |
@@ -111,8 +145,17 @@ jobs:
           Copy-Item "${{ steps.find_exe.outputs.exe_path }}" package/
           Compress-Archive -Path package/* -DestinationPath aseprite.zip
 
-      # 13. 上传
-      - uses: actions/upload-artifact@v4
+      # =========================
+      # 🚀 自动 Release
+      # =========================
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: aseprite
           path: aseprite.zip
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: aseprite.zip
