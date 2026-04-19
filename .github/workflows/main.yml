@@ -1,4 +1,4 @@
-name: Build Aseprite (Real Working)
+name: Build Aseprite (Final Stable)
 
 on:
   workflow_dispatch:
@@ -18,29 +18,26 @@ jobs:
       - name: Install deps
         run: choco install ninja cmake git python -y
 
-      # 3. 安装 vcpkg（关键）
+      # 3. 安装 vcpkg
       - name: Setup vcpkg
+        shell: cmd
         run: |
           git clone https://github.com/microsoft/vcpkg
           cd vcpkg
           bootstrap-vcpkg.bat
 
-      # 4. 安装依赖库
+      # 4. 安装依赖（关键修复点）
       - name: Install libraries
+        shell: cmd
         run: |
-          vcpkg\vcpkg install ^
-            zlib:x64-windows ^
-            libpng:x64-windows ^
-            freetype:x64-windows ^
-            giflib:x64-windows ^
-            tinyxml2:x64-windows
+          vcpkg\vcpkg install zlib:x64-windows libpng:x64-windows freetype:x64-windows giflib:x64-windows tinyxml2:x64-windows
 
-      # 5. depot_tools（Skia 用）
+      # 5. depot_tools
       - name: Install depot_tools
         shell: cmd
         run: git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 
-      # 6. Skia
+      # 6. 构建 Skia
       - name: Build Skia
         shell: cmd
         run: |
@@ -62,7 +59,7 @@ jobs:
         with:
           arch: x64
 
-      # 8. CMake（关键修复）
+      # 8. CMake
       - name: Configure
         shell: cmd
         run: |
@@ -79,13 +76,11 @@ jobs:
             -DSKIA_LIBRARY=../skia/out/Release-x64/skia.lib ^
             ..
 
-          IF NOT EXIST build.ninja (
-            echo CMake FAILED
-            exit /b 1
-          )
+          IF NOT EXIST build.ninja exit /b 1
 
       # 9. Build
       - name: Build
+        shell: cmd
         run: |
           cd build
           ninja aseprite
@@ -94,7 +89,7 @@ jobs:
       - name: Debug
         run: tree /f
 
-      # 11. 找 exe
+      # 11. 查找 exe
       - name: Find exe
         id: find_exe
         shell: powershell
